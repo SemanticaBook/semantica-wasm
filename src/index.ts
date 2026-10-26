@@ -419,6 +419,19 @@ function resolveExecutionProviders(): string[] {
   return ["webgpu", "wasm"];
 }
 
+function resolveWasmThreadCount(): number {
+  if (typeof navigator === "undefined") return 1;
+  const userAgent = navigator.userAgent;
+  const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) ||
+    Boolean((navigator as Navigator & { userAgentData?: { mobile?: boolean } }).userAgentData?.mobile);
+  const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  if (mobile || (deviceMemory !== undefined && deviceMemory <= 4) || !globalThis.crossOriginIsolated) return 1;
+  const logicalCores = Math.max(1, navigator.hardwareConcurrency || 2);
+  // numThreads includes the main inference thread. Leave at least 20% of the
+  // reported logical processors available to the browser and other apps.
+  return Math.max(1, Math.floor(logicalCores * 0.8));
+}
+
 export class BookcliWasm {
   private constructor(
     private readonly session: ortTypes.InferenceSession,
@@ -598,18 +611,18 @@ export class BookcliWasm {
         throw new ModelSourceError("La verificación SHA-256 del modelo falló. Vuelve a cargarlo.");
       }
     }
-    onProgress("Iniciando ONNX Runtime WebAssembly…", 90);
     if (!runtimeConfig) throw new Error("Configura el runtime WASM antes de cargar Laya.");
     ort.env.wasm.wasmPaths = runtimeConfig.wasmPaths as unknown as string;
-    const userAgent = typeof navigator === "undefined" ? "Node.js" : navigator.userAgent;
-    const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) ||
-      (typeof navigator !== "undefined" && Boolean((navigator as Navigator & { userAgentData?: { mobile?: boolean } }).userAgentData?.mobile));
-    const deviceMemory = typeof navigator === "undefined" ? undefined : (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-    ort.env.wasm.numThreads = typeof navigator !== "undefined" && globalThis.crossOriginIsolated && !mobile &&
-      (deviceMemory === undefined || deviceMemory > 4)
-      ? Math.min(2, navigator.hardwareConcurrency || 2)
-      : 1;
+    const wasmThreadCount = resolveWasmThreadCount();
+    ort.env.wasm.numThreads = wasmThreadCount;
+    ort.env.webgpu.powerPreference = "high-performance";
     const executionProviders = resolveExecutionProviders();
+    onProgress(
+      executionProviders.includes("webgpu")
+        ? "Iniciando ONNX Runtime · WebGPU preferida, WASM de respaldo…"
+        : `Iniciando ONNX Runtime · CPU WASM con ${wasmThreadCount} hilo${wasmThreadCount === 1 ? "" : "s"}…`,
+      90,
+    );
     let modelBytes: Uint8Array;
     try {
       modelBytes = await readAsset(`${base}${variant.onnx}`);
