@@ -47,6 +47,10 @@ export type BookcliLabel = (typeof BOOKCLI_LABELS)[number]["id"];
 export type ModelLoadProgress = (label: string, percent: number) => void;
 export const DEFAULT_LAYA_MODEL_BASE_URL =
   "https://huggingface.co/SemanticaBook/semantica-laya-multilingual-onnx/resolve/main/";
+export const BACKUP_LAYA_MODEL_BASE_URL =
+  "https://raw.githubusercontent.com/SemanticaBook/laya-weights/main/";
+
+class ModelSourceError extends Error {}
 export type ClassificationProgress = (value: number, label: string) => void;
 export type ClassificationEvent = {
   phase: "thinking" | "decided" | "review";
@@ -391,8 +395,12 @@ async function sha256(data: Uint8Array): Promise<string> {
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const bytes = await readAsset(url);
-  return JSON.parse(new TextDecoder().decode(bytes)) as T;
+  try {
+    const bytes = await readAsset(url);
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+  } catch (cause) {
+    throw new ModelSourceError(`No se pudo cargar el recurso del modelo ${url}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
 }
 
 function resolveExecutionProviders(): string[] {
@@ -430,6 +438,26 @@ export class BookcliWasm {
     baseUrl = DEFAULT_LAYA_MODEL_BASE_URL,
     onProgress: ModelLoadProgress = () => undefined,
   ): Promise<BookcliWasm> {
+    const sources = [...new Set([baseUrl, BACKUP_LAYA_MODEL_BASE_URL])];
+    const failures: string[] = [];
+    let lastError: unknown;
+    for (let index = 0; index < sources.length; index += 1) {
+      try {
+        return await this.loadFromBaseUrl(sources[index], onProgress);
+      } catch (error) {
+        lastError = error;
+        if (!(error instanceof ModelSourceError) || index === sources.length - 1) throw error;
+        failures.push(`${sources[index]}: ${error.message}`);
+        onProgress("Fuente principal no disponible; intentando el respaldo de Semantica…", 0);
+      }
+    }
+    throw new Error(`No se pudo cargar Laya desde sus fuentes. ${failures.join(" | ")}`, { cause: lastError });
+  }
+
+  private static async loadFromBaseUrl(
+    baseUrl: string,
+    onProgress: ModelLoadProgress,
+  ): Promise<BookcliWasm> {
     const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
     onProgress("Leyendo manifiesto del modelo…", 0);
     const [{ Tokenizer }, ort] = await Promise.all([
@@ -439,7 +467,7 @@ export class BookcliWasm {
     const manifest = await fetchJson<Manifest>(`${base}manifest.json`);
     const variant = manifest.variants.q8e8 ?? manifest.variants.qdq8;
     if (!variant)
-      throw new Error(
+      throw new ModelSourceError(
         "El modelo no incluye una variante ONNX compatible con WASM.",
       );
     const [tokenizerJson, tokenizerConfig, config] = await Promise.all([
@@ -498,7 +526,7 @@ export class BookcliWasm {
         try {
           bytes = await readAsset(url);
         } catch (cause) {
-          throw new Error(`Falló la descarga de ${name}. Revisa la conexión y que el hosting permita servir los archivos del modelo.`, { cause });
+          throw new ModelSourceError(`Falló la descarga de ${name}. Revisa la conexión y que el hosting permita servir los archivos del modelo.`, { cause });
         }
         fromCache = false;
       }
@@ -507,7 +535,7 @@ export class BookcliWasm {
         : manifest.chunk_bytes;
       if (expectedLength && bytes.byteLength !== expectedLength) {
         if (fromCache && cache) await cache.delete(cacheKey).catch(() => undefined);
-        throw new Error(`El bloque ${name} tiene ${bytes.byteLength} bytes; se esperaban ${expectedLength}. Limpia la caché del sitio y vuelve a intentar.`);
+        throw new ModelSourceError(`El bloque ${name} tiene ${bytes.byteLength} bytes; se esperaban ${expectedLength}. Limpia la caché del sitio y vuelve a intentar.`);
       }
       const expectedPartHash = variant.data.partSha256?.[index];
       if (expectedPartHash) {
@@ -519,7 +547,7 @@ export class BookcliWasm {
         }
         if (partHash !== expectedPartHash) {
           if (cache) await cache.delete(cacheKey).catch(() => undefined);
-          throw new Error(`El bloque ${name} no pasó la verificación SHA-256. Se eliminó de la caché; vuelve a cargarlo con una conexión estable.`);
+          throw new ModelSourceError(`El bloque ${name} no pasó la verificación SHA-256. Se eliminó de la caché; vuelve a cargarlo con una conexión estable.`);
         }
         onProgress(
           `Verificando modelo · bloque ${index + 1} de ${variant.data.parts.length}`,
@@ -543,7 +571,7 @@ export class BookcliWasm {
       );
     }
     if (downloaded !== variant.data.size) {
-      throw new Error(
+      throw new ModelSourceError(
         "El tamaño descargado del modelo no coincide con el manifiesto.",
       );
     }
@@ -567,7 +595,7 @@ export class BookcliWasm {
               cache.delete(`${base}${name}?sha256=${variant.data.sha256}`),
             ),
           );
-        throw new Error("La verificación SHA-256 del modelo falló. Vuelve a cargarlo.");
+        throw new ModelSourceError("La verificación SHA-256 del modelo falló. Vuelve a cargarlo.");
       }
     }
     onProgress("Iniciando ONNX Runtime WebAssembly…", 90);
@@ -582,7 +610,12 @@ export class BookcliWasm {
       ? Math.min(2, navigator.hardwareConcurrency || 2)
       : 1;
     const executionProviders = resolveExecutionProviders();
-    const modelBytes = await readAsset(`${base}${variant.onnx}`);
+    let modelBytes: Uint8Array;
+    try {
+      modelBytes = await readAsset(`${base}${variant.onnx}`);
+    } catch (cause) {
+      throw new ModelSourceError(`No se pudo descargar ${variant.onnx} desde ${base}.`, { cause });
+    }
     const createSession = (providers: string[]) => ort.InferenceSession.create(modelBytes, {
       executionProviders: providers,
       graphOptimizationLevel: "all",
