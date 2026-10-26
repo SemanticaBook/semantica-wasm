@@ -4,9 +4,15 @@ import { createWorker, PSM } from "tesseract.js";
 import type { BookcliWasmClient } from "./client.js";
 import type { ReviewHandler, ClassificationEvent, InferenceSettings } from "./index.js";
 import { detectVisualRegions, type TextRegion } from "./vision.js";
+import { loadCoverAsset, mergeBookMetadata, searchBookMetadata, type BookCoverCandidate, type BookMetadata, type BookMetadataOptions, type CoverSelection, type CoverSelectionRequest } from "./metadata.js";
 
 export type OutputFormat = "epub" | "markdown";
 export type ConversionProgress = (value: number, label: string) => void;
+export type BatchConversionProgress = (fileIndex: number, totalFiles: number, value: number, label: string, fileName: string) => void;
+export type BatchConversionHandlers = {
+  onResult?: (result: Awaited<ReturnType<typeof convertPdf>>, fileIndex: number, totalFiles: number, file: File) => void | Promise<void>;
+  onError?: (error: unknown, fileIndex: number, totalFiles: number, file: File) => void | Promise<void>;
+};
 export type RecoveredImage = {
   id: string;
   page: number;
@@ -18,6 +24,10 @@ export type RecoveredImage = {
   dataUrl: string;
 };
 export type SemanticaClassifier = Pick<BookcliWasmClient, "classifyText">;
+export type ExtractionMode = "text" | "ocr";
+export type { BookCoverCandidate, BookMetadata, BookMetadataOptions, CoverAsset, CoverSelection, CoverSelectionRequest } from "./metadata.js";
+
+type ResolvedCover = { bytes: Uint8Array; mimeType: string };
 
 type PositionedText = TextRegion & { text: string; blockIndex: number };
 type PdfTextItem = {
@@ -26,6 +36,13 @@ type PdfTextItem = {
   width: number;
   height: number;
   hasEOL: boolean;
+  fontName?: string;
+};
+type DigitalParagraph = {
+  text: string;
+  box: TextRegion;
+  fontSize: number;
+  bold: boolean;
 };
 type OcrLine = { text: string; bbox: TextRegion };
 const OCR_SHORT_WORDS = new Set("a al de del el en es la las le lo los me mi no o os se si sí su te tu un va y ya it is to of in on at by an as we he my so or be do if up us am im".split(/\s+/));
@@ -128,12 +145,25 @@ function normalizedText(text: string) {
   return text.toLocaleLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function hasVisiblePageContent(image: ImageData) {
-  const stride = 4;
+function hasVisibleContentOutsideText(image: ImageData, regions: TextRegion[]) {
+  const cellSize = 8;
+  const columns = Math.ceil(image.width / cellSize);
+  const rows = Math.ceil(image.height / cellSize);
+  const textMask = new Uint8Array(columns * rows);
+  for (const region of regions) {
+    const left = Math.max(0, Math.floor(region.left / cellSize));
+    const top = Math.max(0, Math.floor(region.top / cellSize));
+    const right = Math.min(columns - 1, Math.floor(region.right / cellSize));
+    const bottom = Math.min(rows - 1, Math.floor(region.bottom / cellSize));
+    for (let y = top; y <= bottom; y += 1) {
+      textMask.fill(1, y * columns + left, y * columns + right + 1);
+    }
+  }
   let samples = 0;
   let content = 0;
-  for (let y = 0; y < image.height; y += stride) {
-    for (let x = 0; x < image.width; x += stride) {
+  for (let y = 0; y < image.height; y += cellSize) {
+    for (let x = 0; x < image.width; x += cellSize) {
+      if (textMask[Math.floor(y / cellSize) * columns + Math.floor(x / cellSize)]) continue;
       const offset = (y * image.width + x) * 4;
       const red = image.data[offset];
       const green = image.data[offset + 1];
@@ -145,6 +175,26 @@ function hasVisiblePageContent(image: ImageData) {
     }
   }
   return samples > 0 && content / samples > 0.0005;
+}
+
+function detectFontHierarchy(paragraphs: DigitalParagraph[]) {
+  const sizes = paragraphs
+    .filter((paragraph) => paragraph.text.length > 24 && paragraph.fontSize > 0)
+    .map((paragraph) => paragraph.fontSize)
+    .sort((a, b) => a - b);
+  if (sizes.length < 4) return null;
+  const median = sizes[Math.floor(sizes.length / 2)];
+  const headingIndexes = new Set<number>();
+  paragraphs.forEach((paragraph, index) => {
+    const text = paragraph.text.replace(/\s+/g, " ").trim();
+    if (text.length > 180 || text.length < 2) return;
+    const clearlyLarger = paragraph.fontSize >= median * 1.22;
+    const boldHeading = paragraph.bold && paragraph.fontSize >= median * 1.08 && !/[.!?]$/.test(text);
+    if (clearlyLarger || boldHeading) headingIndexes.add(index);
+  });
+  return headingIndexes.size >= 2 && headingIndexes.size < paragraphs.length * 0.4
+    ? { median, headingIndexes }
+    : null;
 }
 
 function pageParts(text: string) {
@@ -210,6 +260,8 @@ async function makeEpub(
   text: string,
   isStructured = false,
   images: RecoveredImage[] = [],
+  metadata: BookMetadata = { title, authors: [] },
+  cover?: ResolvedCover,
 ): Promise<Blob> {
   const zip = new JSZip();
   zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
@@ -218,6 +270,15 @@ async function makeEpub(
     '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
   );
   const imageManifest: string[] = [];
+  let coverSpine = "";
+  if (cover) {
+    const extension = cover.mimeType === "image/png" ? "png" : "jpg";
+    const mediaType = extension === "png" ? "image/png" : "image/jpeg";
+    zip.file(`OEBPS/images/cover.${extension}`, cover.bytes);
+    zip.file("OEBPS/cover.xhtml", `<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>${escapeHtml(metadata.title)}</title><meta charset="utf-8"/></head><body><img src="images/cover.${extension}" alt="Portada de ${escapeHtml(metadata.title)}" style="display:block;max-width:100%;max-height:100vh;margin:0 auto"/></body></html>`);
+    imageManifest.push(`<item id="cover-image" href="images/cover.${extension}" media-type="${mediaType}" properties="cover-image"/><item id="cover-page" href="cover.xhtml" media-type="application/xhtml+xml"/>`);
+    coverSpine = `<itemref idref="cover-page"/>`;
+  }
   const body = (isStructured ? text : structureText(text))
     .split("\n\n")
     .map((line) => {
@@ -257,7 +318,7 @@ async function makeEpub(
   );
   zip.file(
     "OEBPS/content.opf",
-    `<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id" xml:lang="es"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">urn:uuid:${crypto.randomUUID()}</dc:identifier><dc:title>${escapeHtml(title)}</dc:title><dc:language>es</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>${imageManifest.join("")}</manifest><spine><itemref idref="chapter"/></spine></package>`,
+    `<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id" xml:lang="${escapeHtml(metadata.language || "und")}"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">urn:uuid:${crypto.randomUUID()}</dc:identifier><dc:title>${escapeHtml(metadata.title || title)}</dc:title>${metadata.authors.map((author) => `<dc:creator>${escapeHtml(author)}</dc:creator>`).join("")}${metadata.isbn ? `<dc:identifier id="isbn">${escapeHtml(metadata.isbn)}</dc:identifier>` : ""}${metadata.publisher ? `<dc:publisher>${escapeHtml(metadata.publisher)}</dc:publisher>` : ""}${metadata.publishedDate ? `<dc:date>${escapeHtml(metadata.publishedDate)}</dc:date>` : ""}${metadata.description ? `<dc:description>${escapeHtml(metadata.description)}</dc:description>` : ""}<dc:language>${escapeHtml(metadata.language || "und")}</dc:language></metadata><manifest><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>${imageManifest.join("")}</manifest><spine>${coverSpine}<itemref idref="chapter"/></spine></package>`,
   );
   return zip.generateAsync({ type: "blob", mimeType: "application/epub+zip" });
 }
@@ -271,6 +332,9 @@ export async function convertPdf(
     classifier?: SemanticaClassifier;
     onReview?: ReviewHandler;
     onOcrText?: (text: string) => void;
+    onExtractionMode?: (mode: ExtractionMode) => void;
+    bookMetadata?: BookMetadataOptions;
+    onCoverSelection?: (request: CoverSelectionRequest) => Promise<CoverSelection>;
     onClassification?: (event: ClassificationEvent) => void;
     onImageRecovered?: (image: RecoveredImage) => void;
     inferenceSettings?: Partial<InferenceSettings> & { ocrLanguages?: string; ocrRenderScale?: number; ocrPageMode?: "auto" | "single-column" };
@@ -288,13 +352,16 @@ export async function convertPdf(
 }> {
   const document = await pdfjs.getDocument({ data: await file.arrayBuffer() })
     .promise;
-  const pages: string[] = [];
+  let pages: string[] = [];
+  const digitalPages: DigitalParagraph[][] = [];
   const recoveredImages: RecoveredImage[] = [];
   let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
   let activePage = 1;
   let lastProgress = 0;
   let recoveredText = "";
   let globalBlockOffset = 0;
+  let ocrPageCount = 0;
+  let originalCoverDataUrl: string | undefined;
   const reportProgress = (value: number, label: string) => {
     lastProgress = Math.max(lastProgress, Math.min(82, Math.round(value)));
     onProgress(lastProgress, label);
@@ -302,6 +369,11 @@ export async function convertPdf(
   try {
     for (let number = 1; number <= document.numPages; number += 1) {
       activePage = number;
+      options.onExtractionMode?.("text");
+      reportProgress(
+        ((number - 1) / document.numPages) * 82,
+        `Extrayendo texto del PDF · página ${number} de ${document.numPages}`,
+      );
       const page = await document.getPage(number);
       const content = await page.getTextContent();
       const renderScale = Math.max(1.5, Math.min(3, options.inferenceSettings?.ocrRenderScale ?? 2.2));
@@ -312,6 +384,7 @@ export async function convertPdf(
       const context = canvas.getContext("2d", { willReadFrequently: true });
       if (!context) throw new Error("No se pudo preparar el lienzo para analizar la página.");
       await page.render({ canvasContext: context, viewport }).promise;
+      if (number === 1) originalCoverDataUrl = canvas.toDataURL("image/jpeg", 0.92);
 
       const pdfTextItems: PdfTextItem[] = content.items
         .filter((item) => "str" in item && Boolean(item.str.trim()))
@@ -327,11 +400,24 @@ export async function convertPdf(
         const right = left + Math.max(textHeight * 0.3, item.width * viewport.scale);
         return { left, top: baseline - textHeight, right, bottom: baseline };
       });
-      const digitalParagraphs: { text: string; box: TextRegion }[] = [];
+      const digitalParagraphs: DigitalParagraph[] = [];
       let currentParagraph = "";
       let paragraphBox: TextRegion | null = null;
+      let paragraphFontSize = 0;
+      let paragraphFontSamples = 0;
+      let paragraphBoldSamples = 0;
       let previousBaseline: number | null = null;
       let previousHeight = 0;
+      const pushDigitalParagraph = () => {
+        if (currentParagraph.trim() && paragraphBox) {
+          digitalParagraphs.push({
+            text: currentParagraph.trim(),
+            box: paragraphBox,
+            fontSize: paragraphFontSamples ? paragraphFontSize / paragraphFontSamples : 0,
+            bold: paragraphBoldSamples >= Math.max(1, paragraphFontSamples * 0.65),
+          });
+        }
+      };
       pdfTextItems.forEach((item, index) => {
         const region = pdfTextRegions[index];
         const baseline = region.bottom;
@@ -339,11 +425,22 @@ export async function convertPdf(
         const paragraphGap = previousBaseline !== null &&
           baseline - previousBaseline > Math.max(previousHeight, height) * 1.8;
         if (paragraphGap && currentParagraph.trim() && paragraphBox) {
-          digitalParagraphs.push({ text: currentParagraph.trim(), box: paragraphBox });
+          pushDigitalParagraph();
           currentParagraph = "";
           paragraphBox = null;
+          paragraphFontSize = 0;
+          paragraphFontSamples = 0;
+          paragraphBoldSamples = 0;
         }
         currentParagraph += `${item.str}${item.hasEOL ? "\n" : " "}`;
+        const transformFontSize = Math.hypot(item.transform[0] ?? 0, item.transform[1] ?? 0) ||
+          Math.hypot(item.transform[2] ?? 0, item.transform[3] ?? 0);
+        if (transformFontSize > 0) {
+          paragraphFontSize += transformFontSize;
+          paragraphFontSamples += 1;
+        }
+        const fontFamily = item.fontName ? content.styles[item.fontName]?.fontFamily ?? item.fontName : "";
+        if (/bold|semibold|demi|black|heavy/i.test(fontFamily)) paragraphBoldSamples += 1;
         paragraphBox = paragraphBox
           ? {
               left: Math.min(paragraphBox.left, region.left),
@@ -355,21 +452,23 @@ export async function convertPdf(
         previousBaseline = baseline;
         previousHeight = height;
       });
-      if (currentParagraph.trim() && paragraphBox) {
-        digitalParagraphs.push({ text: currentParagraph.trim(), box: paragraphBox });
-      }
+      pushDigitalParagraph();
       let pageText = digitalParagraphs.map((paragraph) => paragraph.text).join("\n\n");
       let textRegions = pdfTextRegions;
       let recognizedParagraphs: { text: string; box: TextRegion }[] = [];
-      // Scanned pages can contain a small/incomplete embedded text layer (for
-      // example only a chapter heading). OCR those pages instead of trusting it.
-      if (pageText.length < 320 && useOcr) {
+      const pageImageData = context.getImageData(0, 0, canvas.width, canvas.height);
+      const sparseImageContent = pageText.length < 180 &&
+        hasVisibleContentOutsideText(pageImageData, pdfTextRegions);
+      // OCR only sparse pages whose visible content is not represented by the
+      // embedded text layer. Text rich PDFs bypass Tesseract entirely.
+      let pageUsedOcr = false;
+      if (useOcr && sparseImageContent) {
         worker ??= await createWorker(options.inferenceSettings?.ocrLanguages || "spa+eng", 1, {
           logger: (event) => {
             if (event.status === "recognizing text") {
               reportProgress(
                 ((activePage - 1 + event.progress) / document.numPages) * 82,
-                `OCR · página ${activePage} de ${document.numPages}`,
+                `Reconociendo texto con OCR · página ${activePage} de ${document.numPages}`,
               );
             }
           },
@@ -380,6 +479,9 @@ export async function convertPdf(
             : PSM.SINGLE_COLUMN,
         });
         const recognition = await worker.recognize(canvas);
+        pageUsedOcr = true;
+        ocrPageCount += 1;
+        options.onExtractionMode?.("ocr");
         const paragraphs = recognition.data.blocks?.flatMap((block) => block.paragraphs) ?? [];
         recognizedParagraphs = paragraphs.flatMap((paragraph) => splitOcrParagraph(
           paragraph.lines.map((line) => ({
@@ -421,6 +523,7 @@ export async function convertPdf(
       }
 
       pageText = normalizeParagraphFormatting(pageText);
+      digitalPages.push(pageUsedOcr ? [] : digitalParagraphs);
       const parts = pageParts(pageText);
       const unionRegion = textRegions.reduce<TextRegion | null>((union, box) =>
         union
@@ -454,8 +557,9 @@ export async function convertPdf(
         };
       });
 
-      const pageImageData = context.getImageData(0, 0, canvas.width, canvas.height);
-      const sparseScannedPage = pageText.length < 96 && hasVisiblePageContent(pageImageData);
+      const sparseScannedPage = pageText.length < 96 &&
+        hasVisibleContentOutsideText(pageImageData, textRegions) &&
+        (pageUsedOcr || pdfTextItems.length === 0);
       if (sparseScannedPage) {
         const scan: RecoveredImage = {
           id: `scan-p${number}`,
@@ -526,7 +630,9 @@ export async function convertPdf(
       }
       reportProgress(
         Math.round((number / document.numPages) * 82),
-        `OCR e imágenes · página ${number} de ${document.numPages}`,
+        pageUsedOcr
+          ? `OCR e imágenes · página ${number} de ${document.numPages}`
+          : `Extrayendo texto del PDF · página ${number} de ${document.numPages}`,
       );
       canvas.width = 0;
       canvas.height = 0;
@@ -535,6 +641,18 @@ export async function convertPdf(
     await worker?.terminate();
   }
   const title = file.name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ");
+  const digitalParagraphs = digitalPages.flat();
+  const detectedHierarchy = ocrPageCount === 0 ? detectFontHierarchy(digitalParagraphs) : null;
+  if (detectedHierarchy) {
+    let paragraphIndex = 0;
+    pages = digitalPages.map((paragraphs) => paragraphs.map((paragraph) => {
+      const index = paragraphIndex++;
+      const text = normalizeParagraphFormatting(paragraph.text);
+      if (!detectedHierarchy.headingIndexes.has(index)) return text;
+      const level = paragraph.fontSize >= detectedHierarchy.median * 1.5 ? "#" : "##";
+      return `${level} ${text}`;
+    }).join("\n\n"));
+  }
   const body = pages
     .map((text) => text.trim())
     .filter(Boolean)
@@ -543,10 +661,14 @@ export async function convertPdf(
     throw new Error(
       "No se encontró texto. Activa OCR para procesar PDFs escaneados.",
     );
-  onProgress(83, "Organizando estructura…");
+  onProgress(83, detectedHierarchy
+    ? "Jerarquía tipográfica detectada; conservando la estructura del PDF…"
+    : options.classifier
+      ? "Analizando la estructura con Laya…"
+      : "Organizando estructura…");
   let structuredText: string;
   let epubStructuredText: string;
-  if (options.classifier) {
+  if (options.classifier && !detectedHierarchy) {
     const classified = await options.classifier.classifyText(
           body,
           (value, label) =>
@@ -583,22 +705,79 @@ export async function convertPdf(
       recoveredImages,
     );
   } else {
-    const formattedBlocks = pageParts(structureText(body)).map((text, sourceIndex) => ({
+    const formattedBlocks = pageParts(detectedHierarchy ? body : structureText(body)).map((text, sourceIndex) => ({
       text,
       sourceIndex,
     }));
     structuredText = interleaveImages(formattedBlocks, recoveredImages);
     epubStructuredText = structuredText;
   }
-  const markdownFilename = `${title}.md`;
-  const epubFilename = `${title}.epub`;
+  let metadata: BookMetadata = {
+    title: title.trim() || "Libro sin título",
+    authors: [],
+    ...options.bookMetadata?.metadata,
+  };
+  let selectedCover = options.bookMetadata?.cover ?? null;
+  let automaticCoverSelection = false;
+  if (options.bookMetadata?.mode === "auto" || options.onCoverSelection) {
+    onProgress(92, "Buscando portadas y metadatos del libro…");
+    const candidates = await searchBookMetadata(metadata.title, {
+      googleBooksApiKey: options.bookMetadata?.googleBooksApiKey,
+    });
+    if (options.onCoverSelection) {
+      const selectionRequest: CoverSelectionRequest = {
+        query: metadata.title,
+        initialMetadata: metadata,
+        candidates,
+        originalCoverDataUrl,
+      };
+      const selection = await options.onCoverSelection(selectionRequest);
+      metadata = mergeBookMetadata(metadata, selection.metadata);
+      selectedCover = selection.cover ?? null;
+      automaticCoverSelection = Boolean(selection.automatic);
+    } else if (options.bookMetadata?.mode === "auto" && candidates[0]) {
+      selectedCover = { url: candidates[0].coverUrl };
+      metadata = mergeBookMetadata(metadata, candidates[0].metadata);
+    }
+  } else if (options.bookMetadata?.mode === "manual") {
+    metadata = mergeBookMetadata(metadata, options.bookMetadata.metadata);
+  }
+  let resolvedCover: ResolvedCover | undefined;
+  if (selectedCover) {
+    try {
+      resolvedCover = await loadCoverAsset(selectedCover);
+    } catch (cause) {
+      if (options.bookMetadata?.mode === "auto" && !options.onCoverSelection) {
+        const candidates = await searchBookMetadata(metadata.title, {
+          googleBooksApiKey: options.bookMetadata.googleBooksApiKey,
+        });
+        for (const candidate of candidates.slice(1)) {
+          try {
+            resolvedCover = await loadCoverAsset({ url: candidate.coverUrl });
+            metadata = mergeBookMetadata(metadata, candidate.metadata);
+            break;
+          } catch {
+            // Try the next compatible result; metadata remains usable without a cover.
+          }
+        }
+      } else if (automaticCoverSelection && originalCoverDataUrl) {
+        resolvedCover = await loadCoverAsset({ dataUrl: originalCoverDataUrl, mimeType: "image/jpeg" });
+      } else {
+        throw cause;
+      }
+    }
+  }
+  const outputBaseName = (metadata.title || title).replace(/[\\/:*?"<>|]+/g, " ").trim() || title;
+  const markdownFilename = `${outputBaseName}.md`;
+  const epubFilename = `${outputBaseName}.epub`;
+  const yamlQuote = (value: string) => JSON.stringify(value);
   const markdownBlob = new Blob(
     [
-      `---\ntitle: "${title.replaceAll('"', '\\"')}"\nsource: "${file.name}"\npages: ${document.numPages}\n---\n\n${structuredText}\n`,
+      `---\ntitle: ${yamlQuote(metadata.title)}\n${metadata.authors.length ? `authors:\n${metadata.authors.map((author) => `  - ${yamlQuote(author)}`).join("\n")}\n` : ""}${metadata.publisher ? `publisher: ${yamlQuote(metadata.publisher)}\n` : ""}${metadata.publishedDate ? `date: ${yamlQuote(metadata.publishedDate)}\n` : ""}${metadata.language ? `language: ${yamlQuote(metadata.language)}\n` : ""}${metadata.isbn ? `isbn: ${yamlQuote(metadata.isbn)}\n` : ""}${metadata.description ? `description: ${yamlQuote(metadata.description)}\n` : ""}source: ${yamlQuote(file.name)}\npages: ${document.numPages}\n---\n\n${structuredText}\n`,
     ],
     { type: "text/markdown;charset=utf-8" },
   );
-  const epubBlob = await makeEpub(title, epubStructuredText, true, recoveredImages);
+  const epubBlob = await makeEpub(metadata.title || title, epubStructuredText, true, recoveredImages, metadata, resolvedCover);
   const filename = format === "markdown" ? markdownFilename : epubFilename;
   return {
     blob: format === "markdown" ? markdownBlob : epubBlob,
@@ -611,4 +790,43 @@ export async function convertPdf(
     epubFilename,
     markdownFilename,
   };
+}
+
+/** Process a list in order and let callers consume each result before the next PDF starts. */
+export async function processPdfBatch(
+  files: File[],
+  format: OutputFormat,
+  useOcr: boolean,
+  onProgress: BatchConversionProgress = () => undefined,
+  options: Parameters<typeof convertPdf>[4] = {},
+  handlers: BatchConversionHandlers = {},
+): Promise<void> {
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    onProgress(index + 1, files.length, 0, "Preparando el PDF…", file.name);
+    try {
+      const result = await convertPdf(file, format, useOcr, (value, label) => {
+        onProgress(index + 1, files.length, value, label, file.name);
+      }, options);
+      await handlers.onResult?.(result, index + 1, files.length, file);
+    } catch (error) {
+      if (!handlers.onError) throw error;
+      await handlers.onError(error, index + 1, files.length, file);
+    }
+  }
+}
+
+/** Convert a list in order and return all results. Use processPdfBatch to stream results. */
+export async function convertPdfBatch(
+  files: File[],
+  format: OutputFormat,
+  useOcr: boolean,
+  onProgress: BatchConversionProgress = () => undefined,
+  options: Parameters<typeof convertPdf>[4] = {},
+) {
+  const results: Awaited<ReturnType<typeof convertPdf>>[] = [];
+  await processPdfBatch(files, format, useOcr, onProgress, options, {
+    onResult: (result) => { results.push(result); },
+  });
+  return results;
 }

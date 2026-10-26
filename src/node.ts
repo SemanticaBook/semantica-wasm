@@ -105,7 +105,37 @@ export async function convertPdfPath(
   installCanvasDocument();
   const bytes = await readFile(inputPath);
   const file = new File([bytes], basename(inputPath), { type: "application/pdf" });
-  return convertPdf(file, format, useOcr, onProgress, options);
+  const coverPath = options.bookMetadata?.cover?.path;
+  if (!coverPath) return convertPdf(file, format, useOcr, onProgress, options);
+  const coverBytes = await readFile(resolve(coverPath));
+  const extension = coverPath.split(".").pop()?.toLowerCase();
+  if (extension !== "png" && extension !== "jpg" && extension !== "jpeg") {
+    throw new Error("La portada local debe ser un archivo JPEG o PNG.");
+  }
+  const mimeType = extension === "png" ? "image/png" : "image/jpeg";
+  const bookMetadata = {
+    ...options.bookMetadata!,
+    cover: { dataUrl: `data:${mimeType};base64,${coverBytes.toString("base64")}`, mimeType },
+  };
+  return convertPdf(file, format, useOcr, onProgress, { ...options, bookMetadata });
+}
+
+export async function convertPdfPaths(
+  inputPaths: string[],
+  format: OutputFormat,
+  useOcr = false,
+  onProgress: (fileIndex: number, totalFiles: number, value: number, label: string, fileName: string) => void = () => undefined,
+  options: NodeConvertOptions = {},
+) {
+  const results = [];
+  for (let index = 0; index < inputPaths.length; index += 1) {
+    const inputPath = inputPaths[index];
+    const result = await convertPdfPath(inputPath, format, useOcr, (value, label) => {
+      onProgress(index + 1, inputPaths.length, value, label, basename(inputPath));
+    }, options);
+    results.push(result);
+  }
+  return results;
 }
 
 export async function loadLayaModel(
@@ -128,8 +158,10 @@ export async function loadLayaModel(
   });
 }
 
-export { convertPdf } from "./conversion.js";
-export type { OutputFormat, ConversionProgress, RecoveredImage, SemanticaClassifier } from "./conversion.js";
+export { convertPdf, convertPdfBatch, processPdfBatch } from "./conversion.js";
+export type { OutputFormat, ConversionProgress, BatchConversionProgress, BatchConversionHandlers, RecoveredImage, SemanticaClassifier } from "./conversion.js";
+export { searchBookMetadata } from "./metadata.js";
+export type { BookMetadata, BookMetadataOptions, BookCoverCandidate, CoverAsset, CoverSelection, CoverSelectionRequest } from "./metadata.js";
 export type { BookcliWasmClient };
 export { BookcliWasm, BookcliWasm as SemanticaWasm, configureSemanticaWasmRuntime };
 export type { ModelLoadProgress, ClassificationProgress, ClassificationEvent, ReviewHandler, ReviewQuestion, InferenceSettings, BookcliLabel, ClassifiedBlock } from "./index.js";

@@ -26,6 +26,29 @@ await writeFile("./libro.md", Buffer.from(await result.markdownBlob.arrayBuffer(
 
 Una conversión procesa el PDF una sola vez y devuelve `pdfBlob`, `epubBlob` y `markdownBlob`, además de nombres y cantidad de páginas. `convertPdfPath` recibe la ruta PDF, formato preferido (`epub` o `markdown`), opción OCR, callback de progreso y las opciones compartidas con la web. Al llamar `loadLayaModel`, si faltan el manifiesto o los pesos requeridos, Node descarga el checkpoint multilingüe oficial, prepara el ONNX compatible y espera a que esté listo antes de inicializar la sesión. Para no usar Laya, omite `classifier`; para PDFs digitales se puede desactivar OCR.
 
+Para varios archivos, `convertPdfPaths(paths, ...)` en Node y `convertPdfBatch(files, ...)` en el core procesan los PDFs en orden. `processPdfBatch(files, ..., { onResult })` permite consumir y guardar cada resultado antes de iniciar el siguiente, sin retener todos los EPUB en memoria. La app web usa este flujo y registra un estado por archivo.
+
+La extracción intenta primero usar la capa de texto del PDF. Tesseract se reserva para páginas con poco texto extraíble y contenido visual que no está explicado por esa capa; la interfaz distingue «Extrayendo texto del PDF» de «Reconociendo texto con OCR». En PDFs digitales, Semantica analiza el tamaño y el estilo tipográfico de los bloques: si detecta una jerarquía consistente de títulos y encabezados, la conserva y omite Laya; si el texto es plano, usa Laya para proponer la estructura.
+
+## Portadas y metadatos
+
+Node no consulta servicios externos por defecto. Configura `bookMetadata.mode: "auto"` para buscar la primera coincidencia compatible en Open Library, descargar su portada y añadir la metadata encontrada. En modo manual puedes pasar metadata y una portada por URL o ruta local:
+
+```js
+await convertPdfPath("./libro.pdf", "epub", true, onProgress, {
+  classifier: laya,
+  bookMetadata: {
+    mode: "manual",
+    metadata: { title: "Mi libro", authors: ["Autor"], publishedDate: "2024", language: "es" },
+    cover: { path: "./portada.jpg" }, // También admite { url: "https://…" }
+  },
+});
+```
+
+En la app web, al generar un EPUB, Semantica propone hasta tres portadas y metadata de Open Library, además de la primera página original del PDF. Solo el título del archivo se envía para buscar; el PDF permanece local. La persona puede corregir título, autores, editorial, año, idioma, ISBN y descripción, subir una portada o indicar una URL. La selección sugerida queda resaltada y se confirma sola a los tres minutos; ese temporizador se puede pausar. Las portadas remotas deben permitir acceso CORS desde el navegador y ser JPEG o PNG para poder integrarse en el EPUB.
+
+Google Books puede habilitarse opcionalmente con `googleBooksApiKey` en Node o `VITE_GOOGLE_BOOKS_API_KEY` en el entorno del build web; la búsqueda pública exige una clave de API según su documentación. Restringe la clave a la API de Books y a los orígenes de Semantica. Open Library se usa sin clave para la búsqueda normal. La metadata se escribe en el paquete OPF del EPUB y en el front matter YAML de Markdown.
+
 ## Desarrollo y publicación
 
 ```bash

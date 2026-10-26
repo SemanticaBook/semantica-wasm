@@ -4,4 +4,5 @@ import "./browser-runtime.js";
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export * from "./conversion.js";
+export * from "./metadata.js";
 export * from "./index.js";
