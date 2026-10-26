@@ -79,6 +79,14 @@ async function ensureModelDirectory(modelDirectory: string, onProgress?: ModelLo
   return true;
 }
 
+/** Download and prepare the official Laya checkpoint without starting inference. */
+export function prepareLayaModel(
+  modelDirectory = "./models/laya-multilingual",
+  onProgress?: ModelLoadProgress,
+) {
+  return ensureModelDirectory(modelDirectory, onProgress);
+}
+
 function installCanvasDocument() {
   const globals = globalThis as unknown as Record<string, unknown>;
   globals.Path2D ??= Path2D;

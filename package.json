@@ -1,16 +1,21 @@
 {
-  "name": "@semantica/semantica-wasm",
+  "name": "semanticabook",
   "version": "0.1.0",
-  "description": "Motor compartido de conversión PDF a EPUB y Markdown con OCR y clasificación Laya en WASM",
+  "description": "Convierte PDFs a EPUB y Markdown con OCR y estructura semántica local",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/SemanticaBook/semantica-wasm.git" },
-  "keywords": ["pdf", "epub", "markdown", "ocr", "wasm", "laya", "semantica"],
+  "homepage": "https://github.com/SemanticaBook/semantica-wasm#readme",
+  "bugs": { "url": "https://github.com/SemanticaBook/semantica-wasm/issues" },
+  "keywords": ["pdf", "epub", "markdown", "ocr", "wasm", "laya", "semantica", "cli", "book"],
   "engines": { "node": ">=22" },
   "publishConfig": { "access": "public" },
   "private": false,
   "type": "module",
+  "main": "./dist/semantica.js",
+  "types": "./dist/semantica.d.ts",
+  "bin": { "semanticabook": "./dist/cli.js" },
   "exports": {
-    ".": { "types": "./dist/node.d.ts", "browser": "./src/index.ts", "import": "./dist/node.js" },
+    ".": { "types": "./dist/semantica.d.ts", "import": "./dist/semantica.js" },
     "./browser": { "types": "./dist/browser.d.ts", "browser": "./src/browser.ts", "import": "./dist/browser.js" },
     "./node": { "types": "./dist/node.d.ts", "import": "./dist/node.js" },
     "./vision": { "types": "./dist/vision.d.ts", "browser": "./src/vision.ts", "import": "./dist/vision.js" },
@@ -19,10 +24,9 @@
   },
   "files": ["dist", "src", "scripts", "README.md", "LICENSE", "NOTICE.md"],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/set-cli-permissions.mjs",
     "model:download": "bash scripts/build-model.sh",
     "prepack": "npm run build",
-    "prepare": "npm run build",
     "test": "npm run build && node --test tests/*.test.mjs"
   },
   "dependencies": {
