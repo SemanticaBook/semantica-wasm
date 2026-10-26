@@ -1,0 +1,33 @@
+# Dependencias
+node_modules/
+
+# Caché
+.cache/
+.venv/
+
+# Artefactos generados
+dist/
+build/
+coverage/
+/build-multilingual/
+/models/
+
+# Pesos y archivos de modelos (no publicar en Git/npm)
+*.onnx
+*.onnx.data*
+*.safetensors
+*.pt
+*.pth
+*.bin
+
+# Variables y secretos
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Archivos de libros de prueba
+*.pdf
+*.epub

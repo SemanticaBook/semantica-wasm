@@ -24,7 +24,7 @@ await writeFile("./libro.epub", Buffer.from(await result.epubBlob.arrayBuffer())
 await writeFile("./libro.md", Buffer.from(await result.markdownBlob.arrayBuffer()));
 ```
 
-Una conversión procesa el PDF una sola vez y devuelve `pdfBlob`, `epubBlob` y `markdownBlob`, además de nombres y cantidad de páginas. `convertPdfPath` recibe la ruta PDF, formato preferido (`epub` o `markdown`), opción OCR, callback de progreso y las opciones compartidas con la web. Para no usar Laya, omite `classifier`; para PDFs digitales se puede desactivar OCR.
+Una conversión procesa el PDF una sola vez y devuelve `pdfBlob`, `epubBlob` y `markdownBlob`, además de nombres y cantidad de páginas. `convertPdfPath` recibe la ruta PDF, formato preferido (`epub` o `markdown`), opción OCR, callback de progreso y las opciones compartidas con la web. Al llamar `loadLayaModel`, si faltan el manifiesto o los pesos requeridos, Node descarga el checkpoint multilingüe oficial, prepara el ONNX compatible y espera a que esté listo antes de inicializar la sesión. Para no usar Laya, omite `classifier`; para PDFs digitales se puede desactivar OCR.
 
 ## Desarrollo y publicación
 
@@ -44,15 +44,23 @@ SEMANTICA_MODEL_PATH="$PWD/semantica_wasm/build-multilingual/model" npm test --w
 
 El paquete no incluye el modelo de 358 MB. Antes de publicar, confirma el acceso al scope npm `@semantica`, la licencia del proyecto y que el modelo se distribuya por separado. `npm pack --dry-run` sirve para revisar el contenido del tarball.
 
-## Preparar el modelo
+## Descargar y preparar el modelo
 
-La descarga/exportación solo se hace al preparar los assets, no al convertir el PDF:
+Un usuario externo puede descargar y preparar el modelo compatible desde el repositorio de la librería:
 
 ```bash
-PYTHON_BIN="$PWD/.venv/bin/python" bash semantica_wasm/scripts/build-model.sh
+npm run model:download
 ```
 
-El script clona temporalmente el port Apache-2.0 de [layaForWeb](https://github.com/vishalmysore/layaForWeb), descarga el checkpoint `convaiinnovations/laya` de Hugging Face y prepara su subcarpeta `multilingual`. Después exporta a ONNX, cuantiza a `q8e8` y empaqueta el modelo en `apps/web/public/models/laya-multilingual/` con licencia y notices. Requiere espacio y memoria considerables; el checkpoint original ronda 644 MB y la exportación crea artefactos intermedios grandes. La carga inicial del navegador descarga varios cientos de MB; los chunks verificados quedan en Cache Storage.
+Requiere Git y Python 3.11 o posterior. El script crea un entorno virtual bajo la caché del usuario, instala ahí las herramientas de exportación, descarga el checkpoint original desde [ConvAI Innovations en Hugging Face](https://huggingface.co/convaiinnovations/laya/tree/main/multilingual), lo exporta a ONNX, lo cuantiza a `q8e8` y prepara los archivos que consume este runtime. El checkpoint original ocupa unos 644 MB y la exportación requiere espacio en disco y memoria adicionales. No se usa directamente un ONNX de terceros: su arquitectura de entradas/salidas y cuantización no coinciden con el manifiesto `q8e8` que espera la librería.
+
+En el checkout monorepo, el resultado se guarda en `apps/web/public/models/laya-multilingual/`; en un checkout independiente de `semantica-wasm`, queda en `models/laya-multilingual/`. Se puede cambiar con `WEB_MODEL_DIR` y seleccionar el Python con `PYTHON_BIN`, por ejemplo:
+
+```bash
+PYTHON_BIN="$PWD/.venv/bin/python" npm run model:download
+```
+
+El modelo es un artefacto descargable y no se incluye en Git ni en el tarball npm. La web descarga el ONNX ya preparado desde `/models/laya-multilingual/` del mismo sitio y lo guarda en Cache Storage. Si inicias una conversión sin haber cargado Laya, la interfaz lo descarga e inicializa y espera antes de procesar. La web debe desplegar esos archivos; el navegador no puede convertir el checkpoint oficial `safetensors` a ONNX. Si no están publicados, prepara el modelo desde el checkpoint oficial con `npm run model:download` y vuelve a desplegar la web.
 
 El empaquetado agrega un SHA-256 por chunk. El navegador verifica cada parte por separado en vez de pedirle a Web Crypto un búfer adicional del tamaño completo del modelo, lo que reduce el pico de memoria en Android. Si se cambia o vuelve a empaquetar el modelo, `build-model.sh` regenera los hashes. En errores de memoria, la web muestra el tamaño de los pesos, la RAM total estimada del dispositivo y, si Chromium la expone, el heap JS aproximado disponible. El navegador no ofrece una API estándar para consultar la RAM libre exacta del sistema.
 

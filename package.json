@@ -1,0 +1,40 @@
+{
+  "name": "@semantica/semantica-wasm",
+  "version": "0.1.0",
+  "description": "Motor compartido de conversión PDF a EPUB y Markdown con OCR y clasificación Laya en WASM",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/SemanticaBook/semantica-wasm.git" },
+  "keywords": ["pdf", "epub", "markdown", "ocr", "wasm", "laya", "semantica"],
+  "engines": { "node": ">=22" },
+  "publishConfig": { "access": "public" },
+  "private": false,
+  "type": "module",
+  "exports": {
+    ".": { "types": "./dist/node.d.ts", "browser": "./src/index.ts", "import": "./dist/node.js" },
+    "./browser": { "types": "./dist/browser.d.ts", "browser": "./src/browser.ts", "import": "./dist/browser.js" },
+    "./node": { "types": "./dist/node.d.ts", "import": "./dist/node.js" },
+    "./vision": { "types": "./dist/vision.d.ts", "browser": "./src/vision.ts", "import": "./dist/vision.js" },
+    "./client": { "types": "./dist/client.d.ts", "browser": "./src/client.ts", "import": "./dist/client.js" },
+    "./conversion": { "types": "./dist/conversion.d.ts", "browser": "./src/browser.ts", "import": "./dist/conversion.js" }
+  },
+  "files": ["dist", "src", "scripts", "README.md", "LICENSE", "NOTICE.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "model:download": "bash scripts/build-model.sh",
+    "prepack": "npm run build",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@huggingface/tokenizers": "0.2.0",
+    "onnxruntime-web": "1.30.0",
+    "jszip": "^3.10.1",
+    "pdfjs-dist": "^4.10.38",
+    "tesseract.js": "^6.0.1",
+    "@napi-rs/canvas": "^0.1.80"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "~5.6.2"
+  }
+}
