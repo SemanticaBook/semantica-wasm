@@ -83,7 +83,9 @@ En el checkout monorepo, el resultado se guarda en `apps/web/public/models/laya-
 PYTHON_BIN="$PWD/.venv/bin/python" npm run model:download
 ```
 
-El modelo es un artefacto descargable y no se incluye en Git ni en el tarball npm. La web descarga el ONNX ya preparado desde `/models/laya-multilingual/` del mismo sitio y lo guarda en Cache Storage. Si inicias una conversión sin haber cargado Laya, la interfaz lo descarga e inicializa y espera antes de procesar. La web debe desplegar esos archivos; el navegador no puede convertir el checkpoint oficial `safetensors` a ONNX. Si no están publicados, prepara el modelo desde el checkpoint oficial con `npm run model:download` y vuelve a desplegar la web.
+El modelo es un artefacto descargable y no se incluye en Git ni en el tarball npm. `BookcliWasm.load()` y `BookcliWasmClient.load()` descargan los archivos ONNX ya preparados desde el modelo público `SemanticaBook/semantica-laya-multilingual-onnx` en Hugging Face Hub, verifican sus hashes, los guardan en Cache Storage e inicializan ONNX Runtime dentro del navegador. Puedes pasar otra URL base como argumento o configurar `VITE_LAYA_MODEL_BASE_URL` al construir la web. La conversión del checkpoint oficial `safetensors` a ONNX requiere PyTorch/ONNX, memoria y almacenamiento considerables; se hace fuera del navegador en la acción `Build and publish Laya browser model`, no durante la carga. La descarga de los pesos y la inferencia sí ocurren en el dispositivo del usuario.
+
+Para publicar o actualizar el modelo desde GitHub Actions, configura el secreto `HF_TOKEN` con un token de Hugging Face con permiso de escritura y ejecuta manualmente el workflow `Build and publish Laya browser model` en el repositorio web. Opcionalmente define la variable `LAYA_MODEL_REPO` si quieres usar otro repositorio público de modelos. El workflow compila desde el checkpoint multilingüe oficial, incluye los avisos de licencia y publica el artefacto fuera del build de Pages. La acción normal de deploy publica solo la web. Si usas una URL distinta, configura `VITE_LAYA_MODEL_BASE_URL` como variable de Actions para la compilación de la web.
 
 El empaquetado agrega un SHA-256 por chunk. El navegador verifica cada parte por separado en vez de pedirle a Web Crypto un búfer adicional del tamaño completo del modelo, lo que reduce el pico de memoria en Android. Si se cambia o vuelve a empaquetar el modelo, `build-model.sh` regenera los hashes. En errores de memoria, la web muestra el tamaño de los pesos, la RAM total estimada del dispositivo y, si Chromium la expone, el heap JS aproximado disponible. El navegador no ofrece una API estándar para consultar la RAM libre exacta del sistema.
 
@@ -94,7 +96,7 @@ El checkpoint se toma del subdirectorio `multilingual` del repositorio oficial, 
 ```ts
 import { BookcliWasm } from "@semantica/semantica-wasm";
 
-const classifier = await BookcliWasm.load("/models/laya-multilingual/");
+const classifier = await BookcliWasm.load();
 const result = await classifier.classifyText(
   text,
   onProgress,

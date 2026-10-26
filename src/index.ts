@@ -45,6 +45,8 @@ export const BOOKCLI_LABELS = [
 
 export type BookcliLabel = (typeof BOOKCLI_LABELS)[number]["id"];
 export type ModelLoadProgress = (label: string, percent: number) => void;
+export const DEFAULT_LAYA_MODEL_BASE_URL =
+  "https://huggingface.co/SemanticaBook/semantica-laya-multilingual-onnx/resolve/main/";
 export type ClassificationProgress = (value: number, label: string) => void;
 export type ClassificationEvent = {
   phase: "thinking" | "decided" | "review";
@@ -425,7 +427,7 @@ export class BookcliWasm {
   ) {}
 
   static async load(
-    baseUrl = "/models/laya-multilingual/",
+    baseUrl = DEFAULT_LAYA_MODEL_BASE_URL,
     onProgress: ModelLoadProgress = () => undefined,
   ): Promise<BookcliWasm> {
     const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;

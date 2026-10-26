@@ -6,6 +6,7 @@ import type {
   ReviewQuestion,
   InferenceSettings,
 } from "./index.js";
+import { DEFAULT_LAYA_MODEL_BASE_URL } from "./index.js";
 import type { ReviewHandler } from "./index.js";
 
 type ClassificationResult = {
@@ -65,7 +66,7 @@ export class BookcliWasmClient {
   }
 
   static async load(
-    baseUrl = "/models/laya-multilingual/",
+    baseUrl = DEFAULT_LAYA_MODEL_BASE_URL,
     onProgress: ModelLoadProgress = () => undefined,
   ): Promise<BookcliWasmClient> {
     if (BookcliWasmClient.instance) return BookcliWasmClient.instance;
