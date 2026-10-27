@@ -32,9 +32,7 @@
   "type": "module",
   "main": "./dist/semantica.js",
   "types": "./dist/semantica.d.ts",
-  "bin": {
-    "semanticabook": "dist/cli.js"
-  },
+  "bin": { "semanticabook": "dist/cli.js" },
   "exports": {
     ".": {
       "types": "./dist/semantica.d.ts",
