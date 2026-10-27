@@ -5,6 +5,7 @@ import type { BookcliWasmClient } from "./client.js";
 import type { ReviewHandler, ClassificationEvent, InferenceSettings } from "./index.js";
 import { detectVisualRegions, type TextRegion } from "./vision.js";
 import { loadCoverAsset, mergeBookMetadata, searchBookMetadata, type BookCoverCandidate, type BookMetadata, type BookMetadataOptions, type CoverSelection, type CoverSelectionRequest } from "./metadata.js";
+import { getTesseractImageInput } from "./ocr-input.js";
 
 export type OutputFormat = "epub" | "markdown";
 export type ConversionProgress = (value: number, label: string) => void;
@@ -478,7 +479,7 @@ export async function convertPdf(
             ? PSM.AUTO
             : PSM.SINGLE_COLUMN,
         });
-        const recognition = await worker.recognize(canvas);
+        const recognition = await worker.recognize(getTesseractImageInput(canvas));
         pageUsedOcr = true;
         ocrPageCount += 1;
         options.onExtractionMode?.("ocr");

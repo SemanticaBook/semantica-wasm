@@ -1,6 +1,6 @@
 {
   "name": "semanticabook",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Convierte PDFs a EPUB y Markdown con OCR y estructura semántica local",
   "license": "MIT",
   "repository": {
@@ -73,7 +73,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/set-cli-permissions.mjs",
-    "model:download": "bash scripts/build-model.sh",
+    "model:download": "node dist/cli.js model download",
     "prepack": "npm run build",
     "test": "npm run build && node --test tests/*.test.mjs"
   },

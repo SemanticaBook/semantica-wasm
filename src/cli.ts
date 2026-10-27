@@ -3,7 +3,7 @@ import { basename, extname, join, resolve } from "node:path";
 import type { SemanticaOptions } from "./semantica.js";
 import type { BookMetadata } from "./metadata.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 const HELP = `Semantica ${VERSION} · convierte PDFs a EPUB y Markdown
 
 Uso:
@@ -14,8 +14,8 @@ Opciones:
   -o, --output <directorio>   Directorio de salida (predeterminado: ./semantica-output)
   -f, --format <formato>      epub, markdown o both (predeterminado: both)
       --ocr                   Activa OCR para páginas escaneadas o con texto insuficiente
-      --laya                  Clasifica la estructura con Laya; descarga/prepara el modelo si falta
-      --model-dir <directorio> Directorio para guardar los archivos del modelo Laya
+      --laya                  Clasifica con Laya; descarga el modelo listo si falta
+      --model-dir <directorio> Directorio del modelo (por defecto, caché del usuario)
       --title <título>        Título manual del libro
       --author <nombre>       Autor manual (se puede repetir)
       --publisher <nombre>    Editorial manual
@@ -143,8 +143,8 @@ async function runModel(args: string[]): Promise<void> {
     return;
   }
   if (action !== "download") throw new Error(`Acción de modelo desconocida: ${action}. Usa 'semanticabook model --help'.`);
-  const { prepareLayaModel } = await import("./node.js");
-  let modelDirectory = "./models/laya-multilingual";
+  const { getDefaultLayaModelDirectory, prepareLayaModel } = await import("./node.js");
+  let modelDirectory = getDefaultLayaModelDirectory();
   for (let index = 0; index < options.length; index += 1) {
     if (options[index] === "--model-dir") {
       const value = options[index + 1];

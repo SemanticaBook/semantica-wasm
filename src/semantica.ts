@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import {
   convertPdfPath,
+  getDefaultLayaModelDirectory,
   loadLayaModel,
   type OutputFormat,
 } from "./node.js";
@@ -19,6 +20,8 @@ export type SemanticaOptions = Omit<NodeConvertOptions, "classifier"> & {
   useLaya?: boolean;
   /** Directory for downloaded/prepared Laya model files. */
   modelDirectory?: string;
+  /** Optional primary base URL for an already prepared model mirror. */
+  modelBaseUrl?: string;
   /** Progress for PDF extraction, OCR, classification, and output generation. */
   onProgress?: ConversionProgress;
   /** Progress for downloading/preparing and loading Laya. */
@@ -74,7 +77,8 @@ export class Semantica {
     const {
       useOcr = false,
       useLaya = false,
-      modelDirectory = "./models/laya-multilingual",
+      modelDirectory = getDefaultLayaModelDirectory(),
+      modelBaseUrl,
       onProgress = () => undefined,
       onModelProgress,
       classifier: suppliedClassifier,
@@ -82,7 +86,7 @@ export class Semantica {
     } = options;
 
     const classifier = suppliedClassifier ?? (useLaya
-      ? await this.getLayaModel(modelDirectory, onModelProgress)
+      ? await this.getLayaModel(modelDirectory, onModelProgress, modelBaseUrl)
       : undefined);
     const result = await convertPdfPath(
       pdfPath,
@@ -110,11 +114,11 @@ export class Semantica {
     }
   }
 
-  private getLayaModel(modelDirectory: string, onProgress?: ModelLoadProgress) {
-    const key = resolve(modelDirectory);
+  private getLayaModel(modelDirectory: string, onProgress?: ModelLoadProgress, modelBaseUrl?: string) {
+    const key = `${resolve(modelDirectory)}|${modelBaseUrl ?? ""}`;
     let loading = this.layaModels.get(key);
     if (!loading) {
-      loading = loadLayaModel(key, onProgress);
+      loading = loadLayaModel(resolve(modelDirectory), onProgress, modelBaseUrl);
       this.layaModels.set(key, loading);
       loading.catch(() => this.layaModels.delete(key));
     }
@@ -125,5 +129,5 @@ export class Semantica {
 export default Semantica;
 
 export type { BookMetadata };
-export { convertPdfPath, loadLayaModel };
+export { convertPdfPath, getDefaultLayaModelDirectory, loadLayaModel };
 export type { BookcliLabel } from "./index.js";

@@ -27,11 +27,11 @@ Opciones principales:
 - `--format epub|markdown|both`: formatos a guardar (predeterminado: ambos).
 - `--ocr`: activa Tesseract para páginas con contenido visual no representado por la capa de texto.
 - `--laya`: clasifica la estructura con el modelo local Laya.
-- `--model-dir <ruta>`: ubicación del modelo Laya (predeterminada: `./models/laya-multilingual`).
+- `--model-dir <ruta>`: ubicación del modelo Laya (predeterminada: caché del usuario; también se puede definir `SEMANTICA_MODEL_DIR`).
 - `--output <directorio>`: destino de los archivos (predeterminado: `./semantica-output`).
 - `--title`, `--author`, `--publisher`, `--year` y `--cover`: metadata opcional para el libro.
 
-Los archivos se procesan uno por uno. Si pasas varios PDFs, cada uno obtiene su propia carpeta dentro del directorio de salida. Laya es opcional; si se activa y no encuentra el modelo, Semantica descarga el checkpoint oficial y prepara el formato compatible antes de continuar. Esa preparación requiere Bash, Git, Python 3.11 o posterior, conexión a internet, almacenamiento y memoria suficientes. Sin `--laya`, la conversión usa las reglas locales.
+Los archivos se procesan uno por uno. Si pasas varios PDFs, cada uno obtiene su propia carpeta dentro del directorio de salida. Laya es opcional; si se activa y no encuentra el modelo, Semantica descarga el ONNX ya preparado, verifica sus bloques y continúa. No necesita Bash, Git, Python ni PyTorch para convertir. La primera descarga requiere conexión a Internet, unos 370 MB de almacenamiento y memoria adicional al iniciar el runtime; las siguientes ejecuciones reutilizan la caché. Sin `--laya`, la conversión usa las reglas locales.
 
 ## API de Node.js
 
@@ -49,7 +49,6 @@ import Semantica from "semanticabook";
 const semantica = new Semantica({
   useOcr: true,
   useLaya: true,
-  modelDirectory: "./models/laya-multilingual",
   inferenceSettings: {
     minContextLevel: 3,
     maxContextLevel: 5,
@@ -76,7 +75,7 @@ Para acceso avanzado a las funciones de bajo nivel de Node, importa `semanticabo
 
 ### Opciones
 
-El constructor acepta opciones compartidas con el motor, incluyendo `useOcr`, `useLaya`, `modelDirectory`, `inferenceSettings`, `bookMetadata`, `onReview`, `onClassification` y callbacks de progreso. También puedes pasar ajustes particulares en el segundo argumento de `convert(pdfPath, overrides)`.
+El constructor acepta opciones compartidas con el motor, incluyendo `useOcr`, `useLaya`, `modelDirectory`, `modelBaseUrl` (espejo opcional del modelo), `inferenceSettings`, `bookMetadata`, `onReview`, `onClassification` y callbacks de progreso. También puedes pasar ajustes particulares en el segundo argumento de `convert(pdfPath, overrides)`. Si se activa `useLaya`, la primera conversión descarga el modelo si hace falta; requiere conexión a Internet y no necesita preparación manual.
 
 Para especificar metadata y portada local desde código:
 
@@ -92,15 +91,19 @@ const semantica = new Semantica({
 
 ## Modelo Laya
 
-El modelo no está incluido en el paquete npm. La ejecución con `useLaya: true` o la opción CLI `--laya` busca primero los archivos preparados en `modelDirectory`. Si faltan, el core descarga el checkpoint multilingüe oficial de ConvAI Innovations y prepara un modelo ONNX local. Para preparar el modelo por separado usa:
+El modelo no está incluido en el paquete npm. La ejecución con `useLaya: true` o la opción CLI `--laya` busca primero una instalación válida en la caché local. Si no existe, descarga automáticamente los pesos ONNX preparados: intenta primero la fuente configurada y luego el respaldo versionado de Semantica en GitHub. Verifica tamaño y SHA-256 por bloque antes de dejar listo el manifiesto. No exporta el checkpoint ni instala herramientas de desarrollo durante una conversión normal.
+
+La caché predeterminada es `~/.cache/semantica/models/laya-multilingual` en Linux/macOS y `%LOCALAPPDATA%/semantica/models/laya-multilingual` en Windows. Puedes elegir otra carpeta mediante la opción `modelDirectory` o la variable `SEMANTICA_MODEL_DIR`. Para usar una fuente primaria alternativa define `SEMANTICA_LAYA_MODEL_BASE_URL`. El respaldo oficial versionado se intenta automáticamente si la fuente primaria no está disponible.
+
+La descarga se inicia automáticamente cuando el flujo necesita clasificar con Laya. También se puede descargar manualmente antes de una conversión:
 
 ```bash
 npm run model:download
 ```
 
-También puedes preparar el modelo desde cualquier directorio con `semanticabook model download --model-dir ./models/laya-multilingual`.
+También puedes descargarlo desde cualquier directorio con `semanticabook model download --model-dir ./models/laya-multilingual`. Ese comando obtiene el mismo artefacto listo para ejecutar; no necesita Python, Bash, Git ni PyTorch.
 
-La preparación del checkpoint necesita recursos adicionales y tarda más que una conversión normal. Después, los pesos se reutilizan desde el directorio local. La inferencia ocurre en el equipo del usuario.
+La construcción de una nueva variante desde el checkpoint upstream es una tarea de desarrollo separada y puede requerir Python, PyTorch y recursos adicionales. No forma parte de la ruta de uso de la librería. La inferencia de cada libro ocurre localmente en el equipo del usuario.
 
 ## Desarrollo
 

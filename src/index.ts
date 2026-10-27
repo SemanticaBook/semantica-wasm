@@ -108,6 +108,8 @@ type ModelConfig = {
 
 export type SemanticaWasmRuntime = {
   wasmPaths: { mjs: string; wasm: string };
+  /** Node may safely use WASM threads without browser cross-origin isolation. */
+  wasmThreads?: number;
   readAsset?: (url: string) => Promise<Uint8Array>;
 };
 
@@ -420,6 +422,9 @@ function resolveExecutionProviders(): string[] {
 }
 
 function resolveWasmThreadCount(): number {
+  if (runtimeConfig?.wasmThreads && Number.isFinite(runtimeConfig.wasmThreads)) {
+    return Math.max(1, Math.floor(runtimeConfig.wasmThreads));
+  }
   if (typeof navigator === "undefined") return 1;
   const userAgent = navigator.userAgent;
   const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) ||
