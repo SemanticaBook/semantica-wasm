@@ -3,26 +3,76 @@
   "version": "0.1.0",
   "description": "Convierte PDFs a EPUB y Markdown con OCR y estructura semántica local",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/SemanticaBook/semantica-wasm.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SemanticaBook/semantica-wasm.git"
+  },
   "homepage": "https://github.com/SemanticaBook/semantica-wasm#readme",
-  "bugs": { "url": "https://github.com/SemanticaBook/semantica-wasm/issues" },
-  "keywords": ["pdf", "epub", "markdown", "ocr", "wasm", "laya", "semantica", "cli", "book"],
-  "engines": { "node": ">=22" },
-  "publishConfig": { "access": "public" },
+  "bugs": {
+    "url": "https://github.com/SemanticaBook/semantica-wasm/issues"
+  },
+  "keywords": [
+    "pdf",
+    "epub",
+    "markdown",
+    "ocr",
+    "wasm",
+    "laya",
+    "semantica",
+    "cli",
+    "book"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "private": false,
   "type": "module",
   "main": "./dist/semantica.js",
   "types": "./dist/semantica.d.ts",
-  "bin": { "semanticabook": "./dist/cli.js" },
-  "exports": {
-    ".": { "types": "./dist/semantica.d.ts", "import": "./dist/semantica.js" },
-    "./browser": { "types": "./dist/browser.d.ts", "browser": "./src/browser.ts", "import": "./dist/browser.js" },
-    "./node": { "types": "./dist/node.d.ts", "import": "./dist/node.js" },
-    "./vision": { "types": "./dist/vision.d.ts", "browser": "./src/vision.ts", "import": "./dist/vision.js" },
-    "./client": { "types": "./dist/client.d.ts", "browser": "./src/client.ts", "import": "./dist/client.js" },
-    "./conversion": { "types": "./dist/conversion.d.ts", "browser": "./src/browser.ts", "import": "./dist/conversion.js" }
+  "bin": {
+    "semanticabook": "dist/cli.js"
   },
-  "files": ["dist", "src", "scripts", "README.md", "LICENSE", "NOTICE.md"],
+  "exports": {
+    ".": {
+      "types": "./dist/semantica.d.ts",
+      "import": "./dist/semantica.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "browser": "./src/browser.ts",
+      "import": "./dist/browser.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
+    },
+    "./vision": {
+      "types": "./dist/vision.d.ts",
+      "browser": "./src/vision.ts",
+      "import": "./dist/vision.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "browser": "./src/client.ts",
+      "import": "./dist/client.js"
+    },
+    "./conversion": {
+      "types": "./dist/conversion.d.ts",
+      "browser": "./src/browser.ts",
+      "import": "./dist/conversion.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "NOTICE.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/set-cli-permissions.mjs",
     "model:download": "bash scripts/build-model.sh",
